@@ -1,3 +1,43 @@
+# Folders, files from the repo
+/data
+/docs
+/config.py
+
+# From cookiecutter data science
+# --- DATA ---
+# Never sync raw or processed data to GitHub
+data/
+*.gdb/
+*.shp
+*.parquet
+*.zip
+
+# --- PYTHON ---
+# Compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment folders
+.venv/
+venv/
+env/
+.conda/
+
+# --- NOTEBOOKS ---
+.ipynb_checkpoints/
+
+# --- SECURITY ---
+# Never sync credentials or local paths
+.env
+auth_key.json
+
+# --- OS SPECIFIC ---
+.DS_Store
+Thumbs.db
+
+# --------
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
