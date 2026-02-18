@@ -49,10 +49,11 @@ def get_master_data():
 # Execute the cached loader
 gdf = get_master_data()
 
-# Main similarity engine
+# Function to calculate similarity: main engine of the script 
 def run_similarity_logic(gdf, ref_geoids, target_states, pop_min, weights):
     """
     Computes similarity scores using DYNAMIC local percentiles based on user filters.
+    Includes Relative Scaling (Min-Max) to ensure a 0-100 range based on the sample.
     """
     # Define the universe for which percentiles should be calculated
     # This is our specific sample for this calculation run
@@ -106,6 +107,9 @@ def run_similarity_logic(gdf, ref_geoids, target_states, pop_min, weights):
     # We'll calculate the Euclidean distance for each group separately to apply weights
     weighted_distances_sq = 0
     
+    # NEW: Store raw distances per group to apply local scaling later
+    group_raw_dists = {}
+    
     for group, metrics in METRIC_GROUPS.items():
         group_cols = [f"{m}_local_pct" for m in metrics]
         group_weight = weights.get(group, 0.5)
@@ -127,14 +131,33 @@ def run_similarity_logic(gdf, ref_geoids, target_states, pop_min, weights):
         # Accumulate the weighted squared distance
         weighted_distances_sq += dists * group_weight
         
-        # Store individual group similarity for the tooltip/table (0-100 scale)
-        # Max possible sq_dist per group is (number of metrics * 1.0^2)
-        max_group_dist = np.sqrt(len(group_cols))
-        universe[f"{group.lower().replace(' ', '_')}_sim"] = (1 - np.sqrt(dists) / max_group_dist) * 100
+        # NEW: Capture the root distance for group-level scaling
+        group_raw_dists[group] = np.sqrt(dists)
 
-    # 5. Final Overall Score
-    final_dist = np.sqrt(weighted_distances_sq / total_weight)
-    universe['overall_similarity'] = (1 - final_dist) * 100
+    # 5. FINAL OVERALL SCORE (RELATIVE SCALING)
+    # Methodology: We use Root Mean Square Error (RMSE) across weighted groups.
+    # To ensure a 0-100 similarity score, we scale the distances relative to the best/worst in the sample.
+    
+    # Step A: Calculate final weighted root distance
+    final_rmse = np.sqrt(weighted_distances_sq / total_weight)
+    
+    # Step B: Apply Min-Max scaling to overall similarity
+    # Similarity = 100 * (1 - (dist - min_dist) / (max_dist - min_dist))
+    d_min, d_max = final_rmse.min(), final_rmse.max()
+    
+    if d_max > d_min:
+        universe['overall_similarity'] = 100 * (1 - (final_rmse - d_min) / (d_max - d_min))
+    else:
+        universe['overall_similarity'] = 100.0
+
+    # Step C: Scale Group Similarities individually for tooltips/display
+    for group, dists in group_raw_dists.items():
+        g_min, g_max = dists.min(), dists.max()
+        sim_col = f"{group.lower().replace(' ', '_')}_sim"
+        if g_max > g_min:
+            universe[sim_col] = 100 * (1 - (dists - g_min) / (g_max - g_min))
+        else:
+            universe[sim_col] = 100.0
     
     # 6. Rank and Clean Up (Excluding References)
     # We remove the "seeds" before assigning ranks so the best look-alike is #1
@@ -151,12 +174,13 @@ def run_similarity_logic(gdf, ref_geoids, target_states, pop_min, weights):
 # Helper for the legend colors
 def get_color(rank_bucket):
     colors = {
-        "Top 10%": "#1a9850",   # Dark Green
-        "10-25%": "#91cf60",    # Light Green
-        "25-50%": "#fee08b",    # Yellow/Tan
-        "50% +": "#d73027"      # Red
+        "Top 10":"#1a9850",   # Dark Green
+        "11-25": "#91cf60",    # Light Green
+        "26-50": "#fee08b",    # Yellow/Tan
+        "50+": "#d73027"       # Red
     }
-    return colors.get(rank_bucket, "#gray")
+    # Return hex color or black if not found to highlight the error
+    return colors.get(rank_bucket, "#000000")
 
 # Add legend to the rendered map
 def add_map_legend(m):
@@ -171,10 +195,10 @@ def add_map_legend(m):
      ">
      <b>Market Rank</b><br>
      <i style="background: #00BFFF; width: 12px; height: 12px; float: left; margin-right: 5px; border: 1px solid black;"></i> Reference<br>
-     <i style="background: #1a9850; width: 12px; height: 12px; float: left; margin-right: 5px; border: 1px solid black;"></i> Top 10%<br>
-     <i style="background: #91cf60; width: 12px; height: 12px; float: left; margin-right: 5px; border: 1px solid black;"></i> 10-25%<br>
-     <i style="background: #fee08b; width: 12px; height: 12px; float: left; margin-right: 5px; border: 1px solid black;"></i> 25-50%<br>
-     <i style="background: #d73027; width: 12px; height: 12px; float: left; margin-right: 5px; border: 1px solid black;"></i> 50% +<br>
+     <i style="background: #1a9850; width: 12px; height: 12px; float: left; margin-right: 5px; border: 1px solid black;"></i> Top 10<br>
+     <i style="background: #91cf60; width: 12px; height: 12px; float: left; margin-right: 5px; border: 1px solid black;"></i> 11-25<br>
+     <i style="background: #fee08b; width: 12px; height: 12px; float: left; margin-right: 5px; border: 1px solid black;"></i> 26-50<br>
+     <i style="background: #d73027; width: 12px; height: 12px; float: left; margin-right: 5px; border: 1px solid black;"></i> 50+<br>
      </div>
      """
     m.get_root().html.add_child(folium.Element(legend_html))
@@ -196,7 +220,6 @@ if 'customer_name' not in st.session_state:
 st.title("🌐 Market Similarity Discovery")
 tab1, tab2, tab3 = st.tabs(["1. Reference", "2. Descriptive Stats", "3. Comparison"])
 
-# --- TAB 1: REFERENCE ---
 # --- TAB 1: REFERENCE ---
 with tab1:
     st.header("Step 1: Define Target Profile")
@@ -303,11 +326,9 @@ with tab2:
                     help="Hover over cells in this column to see the Min/Max contributors from your reference set."
                 )
             },
-            use_container_width=True
+            width="stretch"
         )
 
-# --- TAB 3: COMPARISON ---
-# --- TAB 3: COMPARISON ---
 # --- TAB 3: COMPARISON ---
 with tab3:
     if not st.session_state.ref_geoids:
@@ -332,20 +353,24 @@ with tab3:
                 # Let's keep default weight = 1
                 weights[group] = st.slider(f"{group}", 0.0, 1.0, 0.5)
 
-            if st.button("🚀 Find Look-alike Markets", use_container_width=True):
+            if st.button("🚀 Find Look-alike Markets", width="stretch"):
                 with st.spinner("Analyzing market similarity..."):
                     res = run_similarity_logic(gdf, st.session_state.ref_geoids, target_states, pop_min, weights)
                     if not res.empty:
-                        total = len(res)
-                        res['rank_bucket'] = res['rank'].apply(
-                            lambda r: "Top 10%" if r <= total * 0.10 else 
-                                      "10-25%" if r <= total * 0.25 else 
-                                      "25-50%" if r <= total * 0.50 else "50% +"
-                        )
-                        st.session_state.analysis_results = res
-                    else:
-                        st.error("No matches found. Try adjusting population or state filters.")
+                        # 1. Bucket the ranks based on integer thresholds
+                        def assign_rank_bucket(r):
+                            if r <= 10:
+                                return "Top 10"
+                            elif r <= 25:
+                                return "11-25"
+                            elif r <= 50:
+                                return "26-50"
+                            else:
+                                return "50+"
 
+                        res['rank_bucket'] = res['rank'].apply(assign_rank_bucket)
+                        st.session_state.analysis_results = res
+                    
         # 3. DISPLAY RESULTS
         if st.session_state.analysis_results is not None:
             results = st.session_state.analysis_results
@@ -391,17 +416,20 @@ with tab3:
                     Growth: {row['growth_sim']:.1f}%
                 </div>
                 """
+
+                # Inside your for _, row in map_gdf.iterrows(): loop
+                current_color = get_color(row['rank_bucket']) # Pre-calculate color for this specific row
                 
                 folium.GeoJson(
                     row['geometry'],
-                    style_function=lambda x, color=get_color(row['rank_bucket']): {
-                        'fillColor': color,
+                    style_function=lambda x, fillColor=current_color: { # Capture color here
+                        'fillColor': fillColor,
                         'color': 'black',
-                        'weight': 1.5, # Increased border value
+                        'weight': 1.5,
                         'fillOpacity': 0.7,
-                    },
-                    tooltip=tooltip_html
-                ).add_to(m)
+                        },
+                        tooltip=tooltip_html
+                        ).add_to(m)
 
             # Add legend
             add_map_legend(m)
