@@ -158,6 +158,27 @@ def get_color(rank_bucket):
     }
     return colors.get(rank_bucket, "#gray")
 
+# Add legend to the rendered map
+def add_map_legend(m):
+    legend_html = """
+     <div style="
+     position: fixed; 
+     bottom: 50px; left: 50px; width: 150px; height: 160px; 
+     background-color: white; border:2px solid grey; z-index:9999; font-size:14px;
+     padding: 10px;
+     border-radius: 5px;
+     box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+     ">
+     <b>Market Rank</b><br>
+     <i style="background: #00BFFF; width: 12px; height: 12px; float: left; margin-right: 5px; border: 1px solid black;"></i> Reference<br>
+     <i style="background: #1a9850; width: 12px; height: 12px; float: left; margin-right: 5px; border: 1px solid black;"></i> Top 10%<br>
+     <i style="background: #91cf60; width: 12px; height: 12px; float: left; margin-right: 5px; border: 1px solid black;"></i> 10-25%<br>
+     <i style="background: #fee08b; width: 12px; height: 12px; float: left; margin-right: 5px; border: 1px solid black;"></i> 25-50%<br>
+     <i style="background: #d73027; width: 12px; height: 12px; float: left; margin-right: 5px; border: 1px solid black;"></i> 50% +<br>
+     </div>
+     """
+    m.get_root().html.add_child(folium.Element(legend_html))
+
 # --- CONFIG & SESSION STATE ---
 st.set_page_config(layout="wide", page_title="Site Similarity Hub")
 
@@ -292,11 +313,12 @@ with tab3:
     if not st.session_state.ref_geoids:
         st.info("Waiting for Reference Selection in Tab 1...")
     else:
-        # 1. SETUP STATE PERSISTENCE
+        # SETUP STATE PERSISTENCE
+        # This is needed for the map to persist and not vanish
         if 'analysis_results' not in st.session_state:
             st.session_state.analysis_results = None
 
-        # 2. SIDEBAR PARAMETERS
+        # SIDEBAR PARAMETERS
         with st.sidebar:
             st.header("Search Parameters")
             all_states = pd.Series(gdf['state_name'].unique()).sort_values()
@@ -307,6 +329,7 @@ with tab3:
             st.header("Metric Group Weights")
             weights = {}
             for group in METRIC_GROUPS.keys():
+                # Let's keep default weight = 1
                 weights[group] = st.slider(f"{group}", 0.0, 1.0, 0.5)
 
             if st.button("🚀 Find Look-alike Markets", use_container_width=True):
@@ -380,6 +403,10 @@ with tab3:
                     tooltip=tooltip_html
                 ).add_to(m)
 
+            # Add legend
+            add_map_legend(m)
+
+            # Render the map
             st_folium(m, width=1400, height=650, key="discovery_map")
 
             st.divider()
@@ -402,7 +429,7 @@ with tab3:
 
             st.dataframe(
                 final_table.style.format(formatter), # No changes needed to the call itself
-                use_container_width=True,
+                width="stretch",
                 height=450
             )
 
